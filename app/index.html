@@ -535,18 +535,21 @@
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   let attaching = false, manualDisconnect = false;
 
+  // a band that's busy with another phone or tablet may never answer; don't wait on it forever
+  const timeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(what)), ms))]);
+
   async function attachOnce() {
-    const server = await hr.device.gatt.connect();
+    const server = await timeout(hr.device.gatt.connect(), 12000, 'no answer from the band');
     await sleep(300); // some bands drop the link if asked for services immediately
     if (!server.connected) throw new Error('link dropped');
-    const svc = await server.getPrimaryService('heart_rate');
+    const svc = await timeout(server.getPrimaryService('heart_rate'), 8000, 'no heart rate service');
     const ch = await svc.getCharacteristic('heart_rate_measurement');
     ch.addEventListener('characteristicvaluechanged', onHeartRate);
     await ch.startNotifications();
   }
 
   // Bluetooth links often drop during setup; retry a few times before giving up.
-  async function attach(tries = 5) {
+  async function attach(tries = 3) {
     attaching = true;
     try {
       for (let n = 1; ; n++) {
@@ -571,10 +574,11 @@
   }
 
   const connectError = err =>
-    `Could not connect after several tries (${err.message}). Check that Share heart rate is still on in Google Health, then press Connect again.`;
+    `Could not connect (${err.message}). Is the band still connected to another phone, tablet or app? Close Breathfold there, check that Share heart rate is on in Google Health, then press Connect again.`;
 
   async function connect() {
     if (hr.connected) { manualDisconnect = true; hr.device.gatt.disconnect(); return; }
+    if (attaching) return;                 // already trying; the attempt will finish or time out by itself
     try {
       if (!hr.device) {
         updateHrStatus('Pick your device in the browser list…');
