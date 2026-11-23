@@ -631,37 +631,99 @@
   const STAGE_WORDS = { before: 'rest, and just watch', after: 'rest again, and just watch', settle: 'settle in, and just watch' };
   const STAGE_LABELS = { before: 'before', after: 'after', settle: 'settling in' };
 
-  // ---- rest scene: a slow night flight over an endless mountain range (WebGL raymarching).
+  // ---- rest scene: a slow night flight over an endless mountain range.
+  // The fractal mountains are computed once into a seamless, repeating height map; each frame only looks it up,
+  // which is far cheaper than recomputing the fractal per pixel and keeps the ridges steady (no sparkle).
   // Steady glide, no pulsing or rhythm near breathing rates, so it doesn't pace the breath.
   const restScene = (() => {
     const el = $('rest');
-    const gl = el.getContext('webgl', { antialias: false, alpha: false, powerPreference: 'low-power' });
+    const gl = el.getContext('webgl2', { antialias: false, alpha: false, powerPreference: 'low-power' });
     if (!gl) return null;
-    const VS = 'attribute vec2 a;void main(){gl_Position=vec4(a,0.,1.);}';
-    const FS = `
-#ifdef GL_FRAGMENT_PRECISION_HIGH
+    const TILE = 48, N = 2048;            // world units per tile, texels per side
+
+    // -- the height map: ridged fractal noise on a periodic lattice, so the tile wraps without a seam.
+    // Baked in a background worker (with its mip chain), so the breathing animation never stalls.
+    function bake(N) {
+      const rnd = (i, k) => { let x = Math.imul(i ^ (k * 0x9e3779b1), 0x85ebca6b); x ^= x >>> 13; x = Math.imul(x, 0xc2b2ae35); x ^= x >>> 16; return (x >>> 0) / 4294967296; };
+      const OCT = 7, P0 = 12;            // lattice cells across the tile at the first octave
+      const lat = [];
+      for (let k = 0; k < OCT; k++) {
+        const P = P0 << k, a = new Float32Array(P * P);
+        for (let i = 0; i < P * P; i++) a[i] = rnd(i, k + 1);
+        lat.push(a);
+      }
+      const h = new Float32Array(N * N);
+      for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+        let sum = 0, amp = 0.55, w = 1;
+        for (let k = 0; k < OCT; k++) {
+          const P = P0 << k, a = lat[k];
+          const fx = (x + 0.5) / N * P + k * 0.37, fy = (y + 0.5) / N * P + k * 0.61;
+          const ix = Math.floor(fx), iy = Math.floor(fy);
+          let ux = fx - ix, uy = fy - iy; ux = ux * ux * (3 - 2 * ux); uy = uy * uy * (3 - 2 * uy);
+          const x0 = ix % P, x1 = (x0 + 1) % P, y0 = iy % P, y1 = (y0 + 1) % P;
+          const v = (a[y0 * P + x0] * (1 - ux) + a[y0 * P + x1] * ux) * (1 - uy) + (a[y1 * P + x0] * (1 - ux) + a[y1 * P + x1] * ux) * uy;
+          let n = 1 - Math.abs(v * 2 - 1); n *= n;
+          sum += amp * n * w; w = Math.min(1, n * 1.4); amp *= 0.5;
+        }
+        h[y * N + x] = sum * 2.1 - 0.35;
+      }
+      const levels = [h];                // mip chain by 2x2 averaging (R16F can't generate its own mipmaps)
+      for (let size = N, cur = h; size > 1; size >>= 1) {
+        const s2 = size >> 1, nx = new Float32Array(s2 * s2);
+        for (let y = 0; y < s2; y++) for (let x = 0; x < s2; x++) {
+          const i = 2 * y * size + 2 * x;
+          nx[y * s2 + x] = 0.25 * (cur[i] + cur[i + 1] + cur[i + size] + cur[i + size + 1]);
+        }
+        levels.push(nx); cur = nx;
+      }
+      return levels;
+    }
+
+    let tex = null, baking = false;
+    function upload(levels) {
+      tex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+      levels.forEach((lv, i) => { const s = N >> i; gl.texImage2D(gl.TEXTURE_2D, i, gl.R16F, s, s, 0, gl.RED, gl.FLOAT, lv); });
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    }
+    function startBake() {
+      if (tex || baking) return;
+      baking = true;
+      try {
+        const src = `const bake = ${bake.toString()};
+onmessage = e => { const lv = bake(e.data); postMessage(lv, lv.map(a => a.buffer)); };`;
+        const w = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+        w.onmessage = e => { upload(e.data); w.terminate(); };
+        w.onerror = () => { w.terminate(); upload(bake(N)); };
+        w.postMessage(N);
+      } catch (e) { upload(bake(N)); }   // no workers: bake right here
+    }
+
+    const VS = `#version 300 es
+in vec2 a; void main(){ gl_Position = vec4(a, 0., 1.); }`;
+    const FS = `#version 300 es
 precision highp float;
-#else
-precision mediump float;
-#endif
-uniform vec2 R; uniform float T; uniform vec2 S;
+uniform sampler2D Hm; uniform vec2 R; uniform float T; uniform vec2 S;
+out vec4 o;
+const float TILE = ${TILE.toFixed(1)}, TEX = ${N.toFixed(1)};
 float hash(vec2 p){ p = mod(p, 289.); p = fract(p * vec2(0.1031, 0.1030)); p += dot(p, p.yx + 33.33); return fract((p.x + p.y) * p.x); }
 float noise(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f*f*(3.-2.*f);
   return mix(mix(hash(i), hash(i+vec2(1,0)), u.x), mix(hash(i+vec2(0,1)), hash(i+vec2(1,1)), u.x), u.y); }
-const mat2 M = mat2(1.6, 1.2, -1.2, 1.6);
-float H(vec2 p, int oct){            // ridged fractal noise: sharp crests, soft valleys
-  p *= 0.32; float h = 0., a = 0.55, w = 1.;
-  for (int i = 0; i < 8; i++) { if (i >= oct) break;
-    float n = 1. - abs(noise(p) * 2. - 1.); n *= n;
-    h += a * n * w; w = clamp(n * 1.4, 0., 1.); a *= 0.5; p = M * p; }
-  return h * 2.1 - 0.35;
-}
+float H(vec2 p, float lod){ return textureLod(Hm, p / TILE, lod).r; }
 void main(){
   vec2 uv = (gl_FragCoord.xy - 0.5 * R) / R.y;
+  float px = 1. / R.y;                                                  // view angle of one pixel
   float z = T * 0.36;
-  vec3 ro = vec3(S.x + 1.4 * sin(z * 0.045), 2.0, S.y + z);
-  float yaw = 0.25 * sin(z * 0.03);
-  vec3 fw = normalize(vec3(sin(yaw), -0.09, cos(yaw)));
+  const float A = 0.41;                                                 // fly at a slant across the tile, so the repeat never lines up
+  vec2 dir = vec2(sin(A), cos(A)), side = vec2(dir.y, -dir.x);
+  vec2 pos = S + dir * z + side * 1.4 * sin(z * 0.045);
+  vec3 ro = vec3(pos.x, 2.0, pos.y);
+  float hd = A + 0.25 * sin(z * 0.03);
+  vec3 fw = normalize(vec3(sin(hd), -0.09, cos(hd)));
   vec3 rt = normalize(cross(vec3(0,1,0), fw)), up = cross(fw, rt);
   vec3 rd = normalize(fw + uv.x * rt + uv.y * up);
 
@@ -671,56 +733,53 @@ void main(){
   vec3 sky = mix(night, haze, hor * hor);
   sky += glow * 0.22 * pow(max(dot(rd, L), 0.), 12.);                // the moon's glow behind the haze
   vec2 sg = floor(rd.xz / max(rd.y, 0.05) * 90.);
-  float st = step(0.996, hash(sg)) * smoothstep(0.08, 0.35, rd.y);     // a few still stars
-  sky += moon * st * 0.35;
+  sky += moon * step(0.996, hash(sg)) * smoothstep(0.08, 0.35, rd.y) * 0.35;  // a few still stars
 
   // aurora: curtains traced through stacked sky layers, slowly morphing (noise in time, never repeating)
   vec3 aur = vec3(0.);
   if (rd.y > 0.02) {
     vec2 q0 = (ro.xz + rd.xz * (5. - ro.y) / rd.y) * 0.07;
-    vec2 warp = vec2(noise(q0 * 0.6 + T * 0.006), noise(q0 * 0.6 - T * 0.005 + 7.)) * 1.8;  // slow warping, shared by all layers
-    float jit = fract(52.98 * fract(dot(gl_FragCoord.xy, vec2(0.0671, 0.00584))));  // fixed dither hides the gaps between layers
-    for (int i = 0; i < 9; i++) {
+    vec2 warp = vec2(noise(q0 * 0.6 + T * 0.006), noise(q0 * 0.6 - T * 0.005 + 7.)) * 1.8;
+    float jit = fract(52.98 * fract(dot(gl_FragCoord.xy, vec2(0.0671, 0.00584))));
+    for (int i = 0; i < 12; i++) {
       float fi = float(i);
-      float d = (5. + (fi + jit) * 0.45 - ro.y) / rd.y;
+      float d = (5. + (fi + jit) * 0.34 - ro.y) / rd.y;
       vec2 q = (ro.xz + rd.xz * d) * 0.07 + warp;
       float c = 1. - abs(noise(vec2(q.x * 1.6, q.y * 0.45) + vec2(T * 0.008, 0.)) * 2. - 1.);
       c = pow(c, 7.);
-      vec3 ac = mix(vec3(0.30, 0.95, 0.72), vec3(0.50, 0.50, 0.95), fi / 8.);
-      aur += ac * c * (1. - fi / 9.) * 0.15;
+      aur += mix(vec3(0.30, 0.95, 0.72), vec3(0.50, 0.50, 0.95), fi / 11.) * c * (1. - fi / 12.) * 0.115;
     }
     aur *= smoothstep(0.05, 0.22, rd.y) * (0.55 + 0.45 * noise(vec2(T * 0.01, 3.)));
   }
   sky += aur;
 
+  // march the stored height map; detail level follows the pixel's footprint, so distant ridges don't shimmer
   float t = 0.1, tp = 0.1, hit = 0.;
-  for (int i = 0; i < 100; i++) {
+  float lodK = log2(TEX / TILE * px);
+  for (int i = 0; i < 128; i++) {
     vec3 p = ro + rd * t;
-    float d = p.y - H(p.xz, 6);
-    if (d < 0.0015 * t) { hit = 1.; break; }
-    tp = t; t += d * (0.45 + 0.012 * t); if (t > 30.) break;           // longer strides in the haze, where detail can't be seen
+    float d = p.y - H(p.xz, max(0., lodK + log2(t)));
+    if (d < 0.0012 * t) { hit = 1.; break; }
+    tp = t; t += d * (0.5 + 0.01 * t); if (t > 34.) break;
   }
-  // a ray skimming a ridge can run out of steps just above it; count that as a hit, or the peak flickers against the sky
-  if (hit < 1. && t < 30.) hit = 1.;
-  if (hit > 0.) {                                                       // settle the hit point so it doesn't jitter from frame to frame
-    for (int i = 0; i < 4; i++) { float tm = 0.5 * (tp + t); vec3 q = ro + rd * tm; if (q.y - H(q.xz, 6) < 0.) t = tm; else tp = tm; }
-  }
+  if (hit < 1. && t < 34.) hit = 1.;                                    // a ray skimming a ridge still counts as a hit
   vec3 col = sky;
   if (hit > 0.) {
-    // shade with the same detail the ray marched, over a few pixels' width, so fine creases can't sparkle
-    vec3 p = ro + rd * t; float e = 0.004 + 0.015 * t;
-    float h = H(p.xz, 6);
-    vec3 n = normalize(vec3(h - H(p.xz + vec2(e,0), 6), e, h - H(p.xz + vec2(0,e), 6)));
+    for (int i = 0; i < 5; i++) { float tm = 0.5 * (tp + t); vec3 q = ro + rd * tm; if (q.y - H(q.xz, max(0., lodK + log2(tm))) < 0.) t = tm; else tp = tm; }
+    vec3 p = ro + rd * t;
+    float lod = max(0., lodK + log2(t));
+    float e = max(TILE / TEX, t * px * 1.5);
+    float h = H(p.xz, lod);
+    vec3 n = normalize(vec3(H(p.xz - vec2(e,0), lod) - H(p.xz + vec2(e,0), lod), 2. * e, H(p.xz - vec2(0,e), lod) - H(p.xz + vec2(0,e), lod)));
     float dif = max(dot(n, L), 0.);
-    vec3 rock = vec3(0.05, 0.11, 0.12);
-    col = rock * (0.35 + 0.65 * n.y) + glow * 0.42 * dif;
+    col = vec3(0.05, 0.11, 0.12) * (0.35 + 0.65 * n.y) + glow * 0.42 * dif;
     col = mix(col, moon * 0.75, smoothstep(0.4, 0.95, n.y) * smoothstep(0.9, 1.5, h) * 0.6);  // pale light on the high slopes
     float drift = noise(p.xz * 0.22 + vec2(T * 0.035, T * 0.021));      // mist patches drifting through the valleys
     col = mix(col, haze * 1.3, (1. - smoothstep(-0.1, 0.6, h)) * (0.25 + 0.5 * drift));
     col = mix(col, sky, 1. - exp(-t * 0.1));                            // distance haze
   }
   col *= 1. - 0.35 * dot(uv, uv);                                       // soft vignette
-  gl_FragColor = vec4(pow(col, vec3(0.95)), 1.);
+  o = vec4(pow(col, vec3(0.95)), 1.);
 }`;
     const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
     let prog;
@@ -736,26 +795,33 @@ void main(){
     const a = gl.getAttribLocation(prog, 'a');
     gl.enableVertexAttribArray(a); gl.vertexAttribPointer(a, 2, gl.FLOAT, false, 0, 0);
     const uR = gl.getUniformLocation(prog, 'R'), uT = gl.getUniformLocation(prog, 'T'), uS = gl.getUniformLocation(prog, 'S');
+    gl.uniform1i(gl.getUniformLocation(prog, 'Hm'), 0);
+
+    // bake the mountains while the app is idle, well before the first rest check
+    setTimeout(startBake, 800);
+
     let on = false, lastDraw = 0, seed = [0, 0], t0 = 0;
-    // resolution adapts to the device: if frames arrive late, draw fewer pixels (CSS scales the canvas up)
+    // sharp by default; only if frames keep arriving late does it draw fewer pixels, and never changes mid-glide more than needed
     let scale = 0, gap = 33, draws = 0;
-    const maxScale = () => Math.min(0.6, 900 / Math.max(innerWidth, innerHeight));
+    const maxScale = () => Math.min(1, 1600 / Math.max(innerWidth, innerHeight));
     return {
       show(v, now) {
-        if (v && !on) { seed = [Math.random() * 200 - 100, Math.random() * 200 - 100]; t0 = now; lastDraw = 0; draws = 0; gap = 33; }
+        if (v && !on) {
+          startBake();
+          seed = [Math.random() * TILE, Math.random() * TILE]; t0 = now; lastDraw = 0; draws = 0; gap = 33;
+          if (scale) scale = Math.min(maxScale(), scale * 1.15);      // try a little sharper again each time
+        }
         on = v; el.classList.toggle('on', v); document.body.classList.toggle('resting', v);
       },
       render(now) {
-        if (!on || now - lastDraw < 29) return;            // ~30 fps is plenty for a slow glide; the slack keeps the pacing even
+        if (!on || !tex || now - lastDraw < 29) return;    // ~30 fps is plenty for a slow glide; the slack keeps the pacing even
         if (lastDraw) gap = gap * 0.9 + Math.min(200, now - lastDraw) * 0.1;
         lastDraw = now;
-        if (!scale) scale = Math.min(0.45, maxScale());
-        if (++draws % 15 === 0) {
-          if (gap > 40) scale = Math.max(0.2, scale * 0.85);
-          else if (gap < 35) scale = Math.min(maxScale(), scale * 1.04);
-        }
+        if (!scale) scale = Math.min(0.85, maxScale());
+        if (++draws % 30 === 0 && gap > 42) scale = Math.max(0.5, scale * 0.85);   // step down only when it's clearly struggling
         const w = Math.max(1, Math.round(innerWidth * scale)), h = Math.max(1, Math.round(innerHeight * scale));
         if (el.width !== w || el.height !== h) { el.width = w; el.height = h; gl.viewport(0, 0, w, h); }
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex);
         gl.uniform2f(uR, w, h); gl.uniform1f(uT, (now - t0) / 1000 + 4); gl.uniform2f(uS, seed[0], seed[1]);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
       },
