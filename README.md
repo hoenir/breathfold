@@ -12,6 +12,19 @@ Connect any sensor that broadcasts the standard Bluetooth Heart Rate Profile (Fi
 - **Before & after**: resting heart rate measured for 1–2 minutes before and after the session.
 - **HRV (RMSSD)**: only with sensors that send beat-to-beat intervals, such as a Polar H10.
 
+## Settle heart rate
+
+Pick **Settle heart rate** in the pattern list (heart rate must be connected). It's for bringing a raised heart rate down, for example after activity.
+
+1. **Your own pace.** Breathe as you are and tap the screen as each breath comes in (7 taps). The pacer starts at exactly that rate, with a slightly longer out-breath.
+2. **Gentle slowing.** After a first settling-in minute, every 6 breaths the app compares heart rate with the 6 breaths before. If it held steady or fell, the pace slows by 4%. The extra time goes to the out-breath first, until the out-breath is twice the in-breath. Never slower than 6 breaths a minute, and no holds.
+3. **Backing off.** If heart rate rises 3 bpm or more, the pace goes back one step and holds for a while. If the breath swing jumped at the same time (a sign of deeper breathing), it first asks for *smaller breaths*. The **Easier** button backs off by hand.
+4. **Small breaths.** The figure only opens partway, and the cues say "soft in" and "slowly out".
+
+The band's delay is allowed for. After each session the app measures how long heart rate trails the breath for that device, and uses that delay to judge each group of breaths.
+
+**Just rest** is the comparison: the same length, no pacer, only the mountain scene. Once there are a few of each, the results card compares the typical heart-rate drop over the first 5 minutes.
+
 ## Install on a phone
 
 - **Android (Chrome)**: open the live app, then menu → *Install app* (or *Add to Home screen*).

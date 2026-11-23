@@ -1,5 +1,5 @@
 // Offline shell: app files are cached on install; fonts are cached the first time they load.
-const CACHE = 'breathfold-v20';
+const CACHE = 'breathfold-v21';
 const SHELL = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', e => {

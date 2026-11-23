@@ -109,6 +109,8 @@
   button:focus-visible, select:focus-visible, input:focus-visible { outline: 1px solid var(--glow); outline-offset: 2px; }
   button.primary { border-color: var(--glow); color: var(--glow); }
   button.heart.on { border-color: var(--ember); color: var(--ember); }
+  .sliders.auto input[type="range"] { opacity: 0.4; }
+  .autonote { grid-column: span 2; align-self: end; letter-spacing: 0.06em; padding-bottom: 1px; }
   .stat, .hrstatus { font-variant-numeric: tabular-nums; letter-spacing: 0.08em; }
   .hrstatus { min-width: 0; }
 
@@ -173,11 +175,12 @@
 </div>
 
 <div class="panel" id="panel">
-  <div class="sliders">
+  <div class="sliders" id="sliders">
     <div class="field"><label for="s-in">Inhale <output id="o-in">4s</output></label><input id="s-in" type="range" min="1" max="12" step="0.5" value="4"></div>
-    <div class="field"><label for="s-hi"><span id="l-hi">Hold</span> <output id="o-hi">4s</output></label><input id="s-hi" type="range" min="0" max="12" step="0.5" value="4"></div>
+    <div class="field" id="f-hi"><label for="s-hi"><span id="l-hi">Hold</span> <output id="o-hi">4s</output></label><input id="s-hi" type="range" min="0" max="12" step="0.5" value="4"></div>
     <div class="field"><label for="s-out">Exhale <output id="o-out">4s</output></label><input id="s-out" type="range" min="1" max="16" step="0.5" value="4"></div>
-    <div class="field"><label for="s-ho">Rest <output id="o-ho">4s</output></label><input id="s-ho" type="range" min="0" max="12" step="0.5" value="4"></div>
+    <div class="field" id="f-ho"><label for="s-ho">Rest <output id="o-ho">4s</output></label><input id="s-ho" type="range" min="0" max="12" step="0.5" value="4"></div>
+    <div class="autonote" id="autonote" hidden></div>
   </div>
   <div class="row">
     <button id="play" class="primary" type="button">Pause</button>
@@ -191,6 +194,10 @@
       <option value="box">Box · 4, 4, 4, 4</option>
       <option value="478">4·7·8</option>
       <option value="custom">Custom</option>
+      <optgroup label="Guided by heart rate">
+        <option value="adaptive">Settle heart rate · adapts to you</option>
+        <option value="justrest">Just rest · no pacer</option>
+      </optgroup>
     </select>
     <select id="shape" aria-label="Shape">
       <option value="5,2">Pentagram</option>
@@ -223,6 +230,7 @@
       <option value="120" selected>2 min rest before/after</option>
       <option value="0">No rest check</option>
     </select>
+    <button id="easy" type="button" hidden>Easier</button>
     <button id="session" class="primary" type="button">Begin session</button>
   </div>
 </div>
@@ -267,11 +275,18 @@
     for (const id of ['shape', 'len', 'measure']) if (saved[id] != null) $(id).value = saved[id];
   }
   let star = $('shape').value.split(',').map(Number);
+  // the user's own slider values; the adaptive mode borrows the sliders for display only
+  const manual = { in: sliders.in.value, hi: sliders.hi.value, out: sliders.out.value, ho: sliders.ho.value };
+  const lens = saved?.lens || {};          // session length remembered per mode
   const save = () => store.set('unfolding-star', {
-    in: sliders.in.value, hi: sliders.hi.value, out: sliders.out.value, ho: sliders.ho.value,
-    shape: $('shape').value, len: $('len').value, measure: $('measure').value,
-    pattern: $('pattern').value,
+    ...manual, shape: $('shape').value, len: $('len').value, measure: $('measure').value,
+    pattern: $('pattern').value, lens: { ...lens, [curMode]: $('len').value },
   });
+
+  // Modes live in the pattern list: a fixed pattern, "Settle heart rate" (pacer follows heart rate) or "Just rest".
+  const MODES = { adaptive: 1, justrest: 1 };
+  const mode = () => MODES[$('pattern').value] ? $('pattern').value : 'pattern';
+  const BEGIN = { pattern: 'Begin session', adaptive: 'Begin settling', justrest: 'Begin resting' };
 
   // research-backed patterns; values are inhale, hold, exhale, rest in seconds
   const PATTERNS = {
@@ -287,6 +302,7 @@
   const matchPattern = () => {
     const cur = KEYS.map(k => +sliders[k].value);
     const sel = $('pattern').value;
+    if (MODES[sel]) return sel;
     const same = id => PATTERNS[id].every((v, i) => v === cur[i]);
     if (PATTERNS[sel] && same(sel)) return sel;
     return Object.keys(PATTERNS).find(same) || 'custom';
@@ -294,8 +310,23 @@
   if (saved?.pattern) $('pattern').value = saved.pattern;
   $('pattern').value = matchPattern();
   const sighing = () => $('pattern').value === 'sigh';
+  let curMode = mode();
+  if (lens[curMode] != null) $('len').value = lens[curMode];
 
-  const phases = () => [
+  // adaptive rhythm: before a session it shows where the last one started
+  let idleR = store.get('breathfold-adapt-start', { in: 2.4, out: 3.6 });
+  const curR = () => session?.ad ? session.ad.r : idleR;
+  function adaptWords() {
+    const ad = session?.ad;
+    if (ad?.cue > 0) return ['smaller breaths', 'slowly out'];
+    if (ad?.remind) return ['small, quiet breath in', 'and let it go'];
+    return ['soft in', 'slowly out'];
+  }
+
+  const phases = () => mode() === 'adaptive' ? (() => {
+    const r = curR(), w = adaptWords();
+    return [{ key: 'in', word: w[0], d: r.in }, { key: 'out', word: w[1], d: r.out }];
+  })() : [
     { key: 'in',  word: 'breathe in',  d: +sliders.in.value },
     { key: 'hi',  word: sighing() ? 'and a little more' : 'hold', d: +sliders.hi.value },
     { key: 'out', word: 'breathe out', d: +sliders.out.value },
@@ -306,7 +337,15 @@
     for (const k in sliders) outs[k].textContent = (+sliders[k].value) + 's';
     $('l-hi').textContent = sighing() ? 'Sip' : 'Hold';
   };
-  syncOutputs();
+
+  function showRhythm() {
+    const r = curR(), P = r.in + r.out;
+    sliders.in.value = r.in; sliders.out.value = r.out;
+    outs.in.textContent = r.in.toFixed(1) + 's'; outs.out.textContent = r.out.toFixed(1) + 's';
+    $('autonote').textContent = session?.stage === 'tap' ? 'Finding your own pace…'
+      : session?.ad ? `${(60 / P).toFixed(1)} breaths a minute · set by your heart rate`
+      : 'Starts at your own pace, then follows your heart rate';
+  }
 
   // ---- timing
   let running = true, phaseIdx = 0, phaseT = 0, last = performance.now();
@@ -524,7 +563,7 @@
   function updateHrStatus(msg) {
     const el = $('hrstatus');
     if (msg) { el.textContent = msg; return; }
-    if (!hr.connected) { el.textContent = hr.device ? 'Disconnected' : 'Fitbit Air, chest strap or watch'; return; }
+    if (!hr.connected) { el.textContent = hr.device ? 'Disconnected' : mode() === 'pattern' ? 'Fitbit Air, chest strap or watch' : 'Connect heart rate to begin'; return; }
     const name = hr.device?.name || 'Sensor';
     el.textContent = hr.bpm == null ? `${name} · waiting for data`
       : hr.hasRR ? `${name} · beat intervals ✓ (${hr.rrPackets}/${hr.packets} packets)`
@@ -571,6 +610,7 @@
     $('connect').classList.add('on');
     $('pulse').hidden = false;
     updateHrStatus();
+    refreshMode();
   }
 
   const connectError = err =>
@@ -601,6 +641,7 @@
     $('connect').textContent = 'Connect heart rate';
     $('connect').classList.remove('on');
     $('pulse').hidden = true;
+    refreshMode();
     if (manualDisconnect) { manualDisconnect = false; hr.device = null; updateHrStatus(); return; }
     // the band dropped out: reconnect quietly to the same device, no picker needed
     try { updateHrStatus('Signal lost, reconnecting…'); await attach(); }
@@ -632,8 +673,10 @@
   // ---- sessions: [measure before] -> breathe -> [measure after] -> results
   let session = null, demoP = 0;
   // the rest checks deliberately don't mention breathing, so it's left alone
-  const STAGE_WORDS = { before: 'rest, and just watch', after: 'rest again, and just watch', settle: 'settle in, and just watch' };
-  const STAGE_LABELS = { before: 'before', after: 'after', settle: 'settling in' };
+  const STAGE_WORDS = { before: 'rest, and just watch', after: 'rest again, and just watch', settle: 'settle in, and just watch',
+    rest: 'rest, and just watch', tap: 'breathe as you are, and tap as each breath comes in' };
+  const STAGE_LABELS = { before: 'before', after: 'after', settle: 'settling in', rest: 'resting', tap: 'your own pace' };
+  let demoHist = null;
 
   // ---- rest scene: a slow night flight over an endless mountain range.
   // The fractal mountains are computed once into a seamless, repeating height map; each frame only looks it up,
@@ -832,32 +875,159 @@ void main(){
     };
   })();
 
+  const newSession = (kind, stages, fast) => ({
+    kind, stages, fast, idx: 0, stageT: 0, clock: 0, startedAt: new Date(), breaths0: breaths,
+    samples: [], marks: {}, swings: [], cycleStart: null, pace: [], rates: [], taps: [],
+    before: { bpm: [], rr: [] }, after: { bpm: [], rr: [] }, breathe: { bpm: [], rr: [] }, tap: { bpm: [], rr: [] }, rest: { bpm: [], rr: [] },
+    measured: false, pattern: phases().map(p => [p.key, p.d]),
+  });
+
   function beginSession() {
     const fast = new URLSearchParams(location.search).has('fast') ? 0.1 : 1; // test hook: ?demo&fast runs a session 10× quicker
-    const measure = hr.connected ? +$('measure').value * fast : 0;
-    const len = +$('len').value * fast;
+    const m = mode(), len = +$('len').value * fast;
     const stages = [];
-    if (measure) stages.push({ key: 'before', dur: measure });
-    else if (+$('measure').value) stages.push({ key: 'settle', dur: 60 * fast }); // no sensor: a quiet minute to settle in
-    stages.push({ key: 'breathe', dur: len });
-    if (measure) stages.push({ key: 'after', dur: measure });
-    session = {
-      stages, idx: 0, stageT: 0, clock: 0, startedAt: new Date(), breaths0: breaths,
-      samples: [], marks: {},
-      before: { bpm: [], rr: [] }, after: { bpm: [], rr: [] }, breathe: { bpm: [], rr: [] },
-      measured: !!measure, swings: [], cycleStart: null,
-      pattern: phases().map(p => [p.key, p.d]),
-    };
+    if (m === 'adaptive') {
+      if (!hr.connected) return;
+      stages.push({ key: 'tap', dur: 90 * fast }, { key: 'breathe', dur: len });
+    } else if (m === 'justrest') {
+      if (!hr.connected) return;
+      stages.push({ key: 'rest', dur: len });
+    } else {
+      const measure = hr.connected ? +$('measure').value * fast : 0;
+      if (measure) stages.push({ key: 'before', dur: measure });
+      else if (+$('measure').value) stages.push({ key: 'settle', dur: 60 * fast }); // no sensor: a quiet minute to settle in
+      stages.push({ key: 'breathe', dur: len });
+      if (measure) stages.push({ key: 'after', dur: measure });
+    }
+    session = newSession(m, stages, fast);
+    session.measured = stages.some(st => st.key === 'before');
     enterStage();
     running = true; $('play').textContent = 'Pause';
     $('session').textContent = 'End session';
+    refreshMode();
   }
 
   function enterStage() {
     const st = session.stages[session.idx];
     session.stage = st.key; session.stageT = 0;
     session.marks[st.key] = [session.clock, null];
-    if (st.key === 'breathe') { phaseIdx = 0; phaseT = 0; session.cycleStart = session.clock; }
+    if (st.key === 'breathe') {
+      phaseIdx = 0; phaseT = 0; session.cycleStart = session.clock;
+      if (session.kind === 'adaptive') startAdaptive();
+    }
+    refreshMode();
+  }
+
+  // ---- Settle heart rate: start at the user's own pace, then slow gently while heart rate holds steady or falls.
+  // Extra time goes to the out-breath first (a longer in-breath invites a bigger breath); never slower than
+  // 6 breaths a minute, never more than twice as long out as in, no holds.
+  const ADAPT = { warm: 60, block: 6, step: 1.04, floorP: 10, rise: 3, steady: 1 };
+  const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+  const meanIn = (s, a, b) => mean(s.samples.filter(p => p[0] >= a && p[0] < b).map(p => p[1]));
+
+  // how long the band's heart rate trails the breath; learned per device from earlier sessions
+  const lagKey = () => hr.device?.name || 'sensor';
+  const bandLag = () => clamp(store.get('breathfold-lag', {})[lagKey()]?.lag ?? 4, 2, 8);
+
+  function slower(r) {
+    const P = r.in + r.out, P2 = Math.min(ADAPT.floorP, P * ADAPT.step);
+    if (P2 - P < 0.02) return null;               // at the floor
+    let i = r.in, o = r.out + (P2 - P);
+    if (o > 2 * i) { i = Math.max(r.in, P2 / 3); o = P2 - i; }
+    return { in: i, out: o };
+  }
+  const faster = r => r.in + r.out <= 2.6 ? null : { in: r.in / ADAPT.step, out: r.out / ADAPT.step };
+
+  function startAdaptive() {
+    const s = session, iv = [];
+    for (let i = 1; i < s.taps.length; i++) iv.push(s.taps[i] - s.taps[i - 1]);
+    const good = iv.filter(x => x >= 1.5 && x <= 20);
+    const P = clamp(good.length >= 2 ? median(good) : 5, 2.5, ADAPT.floorP);
+    const r = { in: P * 0.42, out: P * 0.58 };
+    s.ad = { r, start: { ...r }, own: good.length >= 2, hist: [], pending: null, blockStart: null, blockBreaths: 0, refWin: null,
+      decide: null, cooldown: 0, cue: 0, cueUsed: false, remind: false, lastRemind: s.clock, eased: 0, slowed: 0, log: [], lag: bandLag() };
+    s.rates.push([s.clock, 60 / P]);
+    idleR = { ...r }; store.set('breathfold-adapt-start', idleR);
+  }
+
+  function easeBack(byUser) {
+    const ad = session.ad;
+    if (ad.pending) { ad.pending = null; ad.hist.pop(); ad.slowed--; }   // cancel a slow-down that hasn't started yet
+    const back = ad.hist.pop() || faster(ad.r);
+    if (back) ad.pending = back;
+    ad.cooldown = 2; ad.eased++;
+    if (byUser) ad.log.push({ t: session.clock, action: 'easier (you)' });
+  }
+
+  // median breath swing over the breaths in a window, each breath's window shifted by the band's lag
+  function blockSwing(s, a, b, lag) {
+    const v = s.swings.filter(c => c.t0 >= a - 0.01 && c.t1 <= b + 0.01).map(c => swingFor(s.samples, c.t0 + lag, c.t1 + lag)).filter(x => x != null);
+    return v.length >= 3 ? median(v) : null;
+  }
+
+  function decide() {
+    const s = session, ad = s.ad, { t0, t1, ref } = ad.decide, L = ad.lag;
+    ad.decide = null;
+    const hb = meanIn(s, t0 + L, t1 + L), h0 = meanIn(s, ref[0] + L, ref[1] + L);
+    if (hb == null || h0 == null) return;
+    const d = hb - h0, sb = blockSwing(s, t0, t1, L), sr = blockSwing(s, ref[0], ref[1], L);
+    let action;
+    if (d >= ADAPT.rise) {
+      // heart rate rose: if the swing jumped too, the breaths have probably got deeper; ask for smaller ones first
+      if (!ad.cueUsed && sb != null && sr != null && sb >= 3 && sb >= 1.5 * sr) { ad.cue = 6; ad.cueUsed = true; action = 'smaller breaths'; }
+      else { easeBack(); action = 'eased'; }
+    } else {
+      ad.cueUsed = false;
+      if (ad.cooldown > 0) { ad.cooldown--; action = 'hold'; }
+      else if (d <= ADAPT.steady) {
+        const n = slower(ad.r);
+        if (n) { ad.hist.push(ad.r); ad.pending = n; ad.slowed++; action = 'slower'; } else action = 'floor';
+      } else action = 'hold';
+    }
+    ad.log.push({ t: t1, d: +d.toFixed(1), sb, sr, action });
+  }
+
+  // called at the start of every breath while settling
+  function onCycle() {
+    const s = session, ad = s.ad;
+    if (ad.pending) {
+      ad.r = ad.pending; ad.pending = null;
+      s.rates.push([s.clock, 60 / (ad.r.in + ad.r.out)]);
+      if (ad.blockStart != null) { ad.blockStart = s.clock; ad.blockBreaths = 0; }
+      showRhythm();
+    }
+    if (ad.cue > 0) ad.cue--;
+    ad.remind = !ad.cue && s.clock - ad.lastRemind >= 180 * s.fast;
+    if (ad.remind) ad.lastRemind = s.clock;
+    if (ad.blockStart == null) {                  // the first minute only settles in; syncing up often lifts heart rate briefly
+      if (s.clock - s.marks.breathe[0] >= ADAPT.warm * s.fast) { ad.blockStart = s.clock; ad.blockBreaths = 0; ad.refWin = [s.clock - 30 * s.fast, s.clock]; }
+      return;
+    }
+    if (++ad.blockBreaths >= ADAPT.block) {
+      ad.decide = { t0: ad.blockStart, t1: s.clock, ref: ad.refWin };   // judged once the band has caught up
+      ad.refWin = [ad.blockStart, s.clock];
+      ad.blockStart = s.clock; ad.blockBreaths = 0;
+    }
+  }
+
+  function adaptTick() {
+    const s = session, ad = s.ad;
+    if (ad.decide && s.clock >= ad.decide.t1 + ad.lag) decide();
+    // "until I stop": finish once heart rate has levelled off for two minutes
+    if (+$('len').value === 0 && s.clock - (ad.plateauT || 0) > 10) {
+      ad.plateauT = s.clock;
+      if (s.clock - s.marks.breathe[0] >= 360 * s.fast) {
+        const m = [0, 1, 2, 3].map(i => meanIn(s, s.clock - 30 * s.fast * (i + 1), s.clock - 30 * s.fast * i));
+        if (m.every(x => x != null) && Math.max(...m) - Math.min(...m) <= 2) nextStage();
+      }
+    }
+  }
+
+  function tapBreath() {
+    const s = session;
+    s.taps.push(s.clock);
+    countEl.animate?.([{ opacity: 1, color: '#9fd4c4' }, { opacity: 0.6 }], { duration: 700 });
+    if (s.taps.length >= 7) nextStage();
   }
 
   // ---- breath swing: how far heart rate rises and falls within each breath (works with bpm-only bands)
@@ -877,6 +1047,44 @@ void main(){
     $('swing').textContent = ` · swing ${sw}`;
   }
 
+  // How long heart rate trails the breath: the shift that best lines up heart rate (around its own running mean)
+  // with the pacer. It includes the body's own response and the band's smoothing delay.
+  function estimateLag(s) {
+    const pace = s.pace;
+    if (pace.length < 150 || s.swings.length < 12) return null;
+    const per = median(s.swings.map(c => c.t1 - c.t0));
+    const pts = s.samples.filter(p => p[0] >= pace[0][0] + per && p[0] <= pace[pace.length - 1][0]);
+    if (pts.length < 40) return null;
+    const res = pts.map(([t, v]) => [t, v - mean(pts.filter(q => Math.abs(q[0] - t) <= per / 2).map(q => q[1]))]);
+    const pAt = t => {
+      let lo = 0, hi = pace.length - 1;
+      if (t <= pace[0][0]) return pace[0][1];
+      if (t >= pace[hi][0]) return pace[hi][1];
+      while (hi - lo > 1) { const m = (lo + hi) >> 1; if (pace[m][0] <= t) lo = m; else hi = m; }
+      const [ta, a] = pace[lo], [tb, b] = pace[hi];
+      return a + (b - a) * (t - ta) / Math.max(1e-6, tb - ta);
+    };
+    const corr = (x, y) => {
+      const mx = mean(x), my = mean(y); let sxy = 0, sxx = 0, syy = 0;
+      for (let i = 0; i < x.length; i++) { const a = x[i] - mx, b = y[i] - my; sxy += a * b; sxx += a * a; syy += b * b; }
+      return sxx && syy ? sxy / Math.sqrt(sxx * syy) : 0;
+    };
+    const x = res.map(r => r[1]);
+    let best = null;
+    for (let L = 0; L <= Math.min(10, per * 0.9); L += 0.5) {
+      const r = corr(x, res.map(q => pAt(q[0] - L)));
+      if (!best || r > best.r) best = { lag: L, r };
+    }
+    return best && best.r >= 0.2 ? best : null;
+  }
+
+  function recordLag(lg) {
+    const all = store.get('breathfold-lag', {}), k = lagKey(), prev = all[k];
+    all[k] = prev ? { lag: +(prev.lag * 0.7 + lg.lag * 0.3).toFixed(2), n: prev.n + 1 } : { lag: lg.lag, n: 1 };
+    store.set('breathfold-lag', all);
+    return all[k];
+  }
+
   function nextStage() {
     session.marks[session.stage][1] = session.clock;
     if (session.stage === 'breathe') session.breaths = breaths - session.breaths0;
@@ -887,21 +1095,163 @@ void main(){
 
   function endSessionEarly() {
     if (!session) return;
-    if (session.stage === 'before') { session = null; $('session').textContent = 'Begin session'; return; }
+    if (session.stage === 'before' || session.stage === 'tap') { session = null; $('session').textContent = BEGIN[mode()]; refreshMode(); return; }
     nextStage();
   }
 
   function finishSession() {
     const s = session; session = null;
     running = false; $('play').textContent = 'Resume';
-    $('session').textContent = 'Begin session';
+    $('session').textContent = BEGIN[mode()];
     if (s.breaths == null) s.breaths = breaths - s.breaths0;
     $('swing').textContent = '';
+    s.lagEst = estimateLag(s);
+    if (s.lagEst) s.lagAvg = recordLag(s.lagEst);
+    refreshMode();
     showResults(s);
+  }
+
+  // what the panel shows depends on the mode; called whenever the mode, session or connection changes
+  function refreshMode() {
+    const m = mode(), auto = m === 'adaptive', rest = m === 'justrest';
+    $('sliders').hidden = rest;
+    $('sliders').classList.toggle('auto', auto);
+    for (const k of KEYS) sliders[k].disabled = auto;
+    $('f-hi').hidden = $('f-ho').hidden = auto;
+    $('autonote').hidden = !auto;
+    $('shape').hidden = rest;
+    $('measure').hidden = auto || rest;
+    if (!session) $('session').textContent = BEGIN[m];
+    $('session').disabled = !session && (auto || rest) && !hr.connected;
+    $('easy').hidden = !(session?.kind === 'adaptive' && session.stage === 'breathe');
+    // a guided session can't switch mode midway; a pattern session can still change pattern
+    $('pattern').disabled = !!session && session.kind !== 'pattern';
+    for (const v in MODES) $('pattern').querySelector(`option[value="${v}"]`).disabled = !!session;
+    if (auto) showRhythm(); else syncOutputs();
+  }
+
+  // ---- results for Settle heart rate and Just rest
+  function guidedStats(s) {
+    if (s.samples.length < 10) return null;
+    const f = s.fast || 1, W = 30 * f;
+    const start = meanIn(s, 0, W), end = meanIn(s, s.clock - 60 * f, s.clock + 1);
+    let low = null, t10 = null;
+    for (const [t] of s.samples) {
+      if (t < W) continue;
+      const m = meanIn(s, t - W, t + 0.001);
+      if (low == null || m < low) low = m;
+      if (t10 == null && start != null && m <= start - 10) t10 = t;
+    }
+    // drop over the first five minutes, the same yardstick for both kinds of session
+    const at5 = s.clock >= 330 * f ? meanIn(s, 270 * f, 330 * f) : null;
+    return { start, end, low, t10, d5: start != null && at5 != null ? start - at5 : null };
+  }
+
+  function lagNote(s) {
+    if (!s.lagEst) return '';
+    const avg = s.lagAvg?.n > 1 ? ` On average for ${lagKey()}: ${s.lagAvg.lag.toFixed(1)} s over ${s.lagAvg.n} sessions.` : '';
+    return ` Your heart rate peaked about ${s.lagEst.lag.toFixed(1)} s after each in-breath ended; part of that is the band's own delay, and Settle heart rate allows for it.${avg}`;
+  }
+
+  function showGuidedResults(s) {
+    const st = guidedStats(s), ad = s.ad, f = s.fast || 1;
+    const adaptive = s.kind === 'adaptive';
+    $('r-when').textContent = s.startedAt.toLocaleString([], { weekday: 'long', hour: '2-digit', minute: '2-digit' })
+      + ` · ${fmt(s.clock / f)} · ${adaptive ? 'settle heart rate' : 'just rest'}`;
+    $('r-title').textContent = adaptive ? 'Settling heart rate' : 'Just rest';
+
+    const cell = (v, unit, dp = 0) => v == null ? '<span class="v">—</span>' : `<span class="v">${v.toFixed(dp)}<small>${unit}</small></span>`;
+    const r0 = s.rates[0]?.[1], r1 = s.rates[s.rates.length - 1]?.[1];
+    $('r-compare').innerHTML = st ? `
+      <span></span><span class="h">Start</span><span class="h">End</span>
+      <span class="k">Heart rate</span>${cell(st.start, 'bpm')}${cell(st.end, 'bpm')}
+      ${adaptive && r0 ? `<span class="k">Breathing</span>${cell(r0, '/min', 1)}${cell(r1, '/min', 1)}` : ''}` : '';
+    $('r-compare').hidden = !st;
+
+    const lines = [];
+    if (st) {
+      if (st.t10 != null) lines.push(`Down 10 bpm after <span class="up">${fmt(st.t10 / f)}</span>`);
+      else if (st.low != null && st.start != null) lines.push(`Lowest ${Math.round(st.low)} bpm, ${Math.max(0, st.start - st.low).toFixed(0)} below the start`);
+      if (st.d5 != null) lines.push(`First 5 minutes <span class="${st.d5 >= 0 ? 'up' : 'down'}">${st.d5 >= 0 ? '−' : '+'}${Math.abs(st.d5).toFixed(1)} bpm</span>`);
+    }
+    if (adaptive && ad) {
+      const bits = [`slowed ${ad.slowed} time${ad.slowed === 1 ? '' : 's'}`];
+      if (ad.eased) bits.push(`eased back ${ad.eased}`);
+      const cues = ad.log.filter(l => l.action === 'smaller breaths').length;
+      if (cues) bits.push(`asked for smaller breaths ${cues}×`);
+      lines.push(`Pace ${bits.join(', ')}`);
+    }
+    // settle against just rest, once there are a few of each
+    const hist = store.get('unfolding-star-history', []);
+    const all = st?.d5 != null ? [{ k: s.kind, d5: st.d5 }, ...hist] : hist;
+    const by = k => all.filter(h => h.k === k && h.d5 != null).map(h => h.d5);
+    const a = by('adaptive'), b = by('justrest');
+    if (a.length >= 2 && b.length >= 2) {
+      lines.push(`Typical first-5-minute drop: settling −${median(a).toFixed(1)} bpm (${a.length}) · just rest −${median(b).toFixed(1)} bpm (${b.length})`);
+    }
+    $('r-delta').innerHTML = lines.join('<br>');
+    $('r-delta').hidden = !lines.length;
+
+    let note = adaptive
+      ? (ad?.own ? 'The pace started at your own rhythm' : 'The pace started at a gentle 12 breaths a minute') +
+        ' and slowed only while your heart rate held steady or fell, easing back when it rose. Heart rate falls after activity anyway, so now and then do a Just rest session after similar activity; once there are a few of each, this card compares the two.'
+      : 'No pacer, just rest. These sessions are the yardstick for Settle heart rate: after similar activity, does pacing bring your heart rate down faster than resting alone?';
+    if (st && st.d5 == null) note += ' Sessions of 6 minutes or more also count toward the five-minute comparison.';
+    $('r-note').textContent = note + lagNote(s);
+    $('r-chart').innerHTML = guidedChartSVG(s);
+
+    if (st) {
+      const r1d = v => v == null ? null : +v.toFixed(1);
+      hist.unshift({ t: s.startedAt.toISOString(), m: r1d(s.clock / f / 60), k: s.kind,
+        hb: st.start == null ? null : Math.round(st.start), ha: st.end == null ? null : Math.round(st.end),
+        d5: r1d(st.d5), t10: st.t10 == null ? null : Math.round(st.t10 / f), r0: r1d(r0), r1: r1d(r1) });
+      store.set('unfolding-star-history', hist.slice(0, 50));
+    }
+    renderHistory();
+    $('results').hidden = false;
+    $('r-close').focus();
+  }
+
+  // heart rate (ember) with the breathing rate the pacer set (glow) on the right-hand scale
+  function guidedChartSVG(s) {
+    const pts = s.samples;
+    if (pts.length < 3) return '';
+    const Wc = 600, Hc = 150, padL = 34, padR = 44, padT = 10, padB = 20;
+    const tMax = s.clock || 1;
+    let lo = Math.floor(Math.min(...pts.map(p => p[1])) - 2), hi = Math.ceil(Math.max(...pts.map(p => p[1])) + 2);
+    const X = t => padL + (t / tMax) * (Wc - padL - padR);
+    const Y = v => padT + (1 - (v - lo) / (hi - lo)) * (Hc - padT - padB);
+    const txt = (x, y, anchor, t, fill = 'rgba(228,236,230,0.5)') => `<text x="${x}" y="${y}" text-anchor="${anchor}" fill="${fill}" font-size="10" font-family="IBM Plex Mono, monospace">${t}</text>`;
+    let rate = '';
+    if (s.rates.length) {
+      const rs = s.rates.map(r => r[1]);
+      const rlo = Math.floor(Math.min(...rs) - 1), rhi = Math.ceil(Math.max(...rs) + 1);
+      const Yr = v => padT + (1 - (v - rlo) / (rhi - rlo)) * (Hc - padT - padB);
+      let d = '';
+      s.rates.forEach(([t, v], i) => { d += `${i ? 'H' + X(t).toFixed(1) + 'V' : 'M' + X(t).toFixed(1) + ','}${Yr(v).toFixed(1)}`; });
+      d += `H${X(s.marks.breathe?.[1] ?? tMax).toFixed(1)}`;
+      rate = `<path d="${d}" fill="none" stroke="#9fd4c4" stroke-width="1.2" stroke-dasharray="3 3" opacity="0.8"/>
+        ${txt(Wc - padR + 6, Yr(rhi) + 4, 'start', rhi + '/min', 'rgba(159,212,196,0.7)')}${txt(Wc - padR + 6, Yr(rlo) + 4, 'start', rlo + '/min', 'rgba(159,212,196,0.7)')}`;
+    }
+    const tap = s.marks.tap;
+    const band = tap ? `<rect x="${X(tap[0])}" y="${padT}" width="${Math.max(0, X(tap[1] ?? tMax) - X(tap[0]))}" height="${Hc - padT - padB}" fill="rgba(159,212,196,0.07)"/>
+      ${txt((X(tap[0]) + X(tap[1] ?? tMax)) / 2, Hc - 5, 'middle', 'own pace')}` : '';
+    const br = s.marks.breathe;
+    const lab = br ? txt((X(br[0]) + X(br[1] ?? tMax)) / 2, Hc - 5, 'middle', 'paced') : txt((padL + Wc - padR) / 2, Hc - 5, 'middle', 'resting');
+    const line = pts.map((p, i) => `${i ? 'L' : 'M'}${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join('');
+    return `<svg viewBox="0 0 ${Wc} ${Hc}" role="img" aria-label="Heart rate${s.rates.length ? ' and breathing rate' : ''} during the session">
+      ${band}${lab}
+      <line x1="${padL}" x2="${Wc - padR}" y1="${Y(hi)}" y2="${Y(hi)}" stroke="rgba(228,236,230,0.08)"/>
+      <line x1="${padL}" x2="${Wc - padR}" y1="${Y(lo)}" y2="${Y(lo)}" stroke="rgba(228,236,230,0.08)"/>
+      ${txt(padL - 6, Y(hi) + 4, 'end', hi)}${txt(padL - 6, Y(lo) + 4, 'end', lo)}
+      ${rate}
+      <path d="${line}" fill="none" stroke="#e8a08f" stroke-width="1.5" stroke-linejoin="round"/>
+    </svg>`;
   }
 
   // ---- results card
   function showResults(s) {
+    if (s.kind === 'adaptive' || s.kind === 'justrest') return showGuidedResults(s);
     const b = rmssd(s.before.rr), a = rmssd(s.after.rr);
     const hb = mean(s.before.bpm), ha = mean(s.after.bpm);
     const minutes = (s.marks.breathe[1] - s.marks.breathe[0]) / 60;
@@ -947,7 +1297,7 @@ void main(){
     if (s.samples.length && !hasRR) notes.push('Your band sends heart rate only, about once a second and smoothed, so standard HRV is not available and the swing reads smaller than a chest strap would show. Compare it with your own earlier sessions.');
     else if (s.measured && (!b || !a)) notes.push('Not enough clean heartbeats in one of the rest measurements to calculate HRV. Sit still with the sensor snug, or try 2 minutes.');
     else if (b && a) notes.push(`RMSSD from ${b.beats} and ${a.beats} beats. Short readings vary a lot; compare sessions at the same time of day.`);
-    $('r-note').textContent = notes.join(' ');
+    $('r-note').textContent = notes.join(' ') + lagNote(s);
 
     $('r-chart').innerHTML = chartSVG(s) + cycleSVG(s);
 
@@ -1036,10 +1386,10 @@ void main(){
     const rows = hist.map(h => {
       const d = new Date(h.t);
       return `<tr><td>${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</td>
-        <td>${h.m} min</td><td>${pair(h.hb, h.ha, 'bpm')}</td><td>${h.sw == null ? '—' : h.sw + ' bpm'}</td>
+        <td>${h.m} min${h.k === 'adaptive' ? ' · settle' : h.k === 'justrest' ? ' · rest' : ''}</td><td>${pair(h.hb, h.ha, 'bpm')}</td><td>${h.sw == null ? '—' : h.sw + ' bpm'}</td>
         ${showHRV ? `<td>${pair(h.b, h.a, 'ms')}</td>` : ''}</tr>`;
     }).join('');
-    $('r-history').innerHTML = `<table class="history"><thead><tr><th>Recent</th><th>Length</th><th>Resting HR</th><th>Swing</th>${showHRV ? '<th>HRV</th>' : ''}</tr></thead><tbody>${rows}</tbody></table>`;
+    $('r-history').innerHTML = `<table class="history"><thead><tr><th>Recent</th><th>Length</th><th>Heart rate</th><th>Swing</th>${showHRV ? '<th>HRV</th>' : ''}</tr></thead><tbody>${rows}</tbody></table>`;
   }
 
   $('r-close').addEventListener('click', () => { $('results').hidden = true; poke(); });
@@ -1052,7 +1402,7 @@ void main(){
     const list = phases();
     if (phaseIdx >= list.length) phaseIdx = 0;
     let ph = list[phaseIdx];
-    const measuring = session && session.stage !== 'breathe';
+    const measuring = session ? session.stage !== 'breathe' : mode() === 'justrest';
 
     if (running) {
       elapsed += dt;
@@ -1060,6 +1410,7 @@ void main(){
         session.clock += wall; session.stageT += wall;
         const dur = session.stages[session.idx].dur;
         if (dur && session.stageT >= dur) nextStage();
+        if (session?.ad && session.stage === 'breathe') adaptTick();
       }
       if (!measuring) {
         phaseT += dt;
@@ -1068,7 +1419,7 @@ void main(){
           if (ph.key === 'out') breaths++;
           phaseIdx = (phaseIdx + 1) % list.length;
           ph = list[phaseIdx];
-          if (phaseIdx === 0 && session?.stage === 'breathe') closeCycle();
+          if (phaseIdx === 0 && session?.stage === 'breathe') { closeCycle(); if (session.ad) onCycle(); }
         }
       }
     }
@@ -1082,17 +1433,25 @@ void main(){
       $('beat').style.transform = `scale(${0.8 + 0.4 * beat})`;
     }
 
-    const stillMeasuring = session && session.stage !== 'breathe';
-    restScene?.show(!!stillMeasuring, now);
+    const stillMeasuring = session ? session.stage !== 'breathe' : mode() === 'justrest';
+    restScene?.show(stillMeasuring, now);
     if (stillMeasuring) {
       if (restScene) { restScene.render(now); ctx.clearRect(0, 0, W, H); }
       else draw(0.04, 0.15, beat);
-      const left = session.stages[session.idx].dur - session.stageT;
-      setWord(running ? STAGE_WORDS[session.stage] : 'paused');
-      countEl.textContent = `${STAGE_LABELS[session.stage]} · ${fmt(Math.max(0, left))}`;
+      if (!session) { setWord(STAGE_WORDS.rest); countEl.textContent = ''; }
+      else {
+        const dur = session.stages[session.idx].dur, left = dur - session.stageT;
+        setWord(running ? STAGE_WORDS[session.stage] : 'paused');
+        const time = dur ? fmt(Math.max(0, left)) : fmt(session.stageT);
+        countEl.textContent = session.stage === 'tap' ? `${session.taps.length} of 7 taps · ${time}` : `${STAGE_LABELS[session.stage]} · ${time}`;
+      }
     } else {
-      const p = unfoldAmount(ph, phaseT / ph.d);
-      demoP = p;
+      const raw = unfoldAmount(ph, phaseT / ph.d);
+      if (session?.stage === 'breathe' && running && session.clock - (session.paceT ?? -1) >= 0.2) { session.pace.push([session.clock, raw]); session.paceT = session.clock; }
+      // settling asks for small breaths, so the figure only opens partway
+      const p = mode() === 'adaptive' ? raw * 0.7 : raw;
+      demoP = raw;
+      if (demoHist) { demoHist.push([now, raw]); if (demoHist.length > 600) demoHist.shift(); }
       const glowAmt = ph.key === 'hi' ? 0.6 + 0.4 * Math.sin(now / 600) : p;
       draw(p, glowAmt, beat * 0.6);
       setWord(running ? ph.word : ($('results').hidden ? 'paused' : 'well done'));
@@ -1106,15 +1465,23 @@ void main(){
   requestAnimationFrame(frame);
 
   // ---- controls
-  for (const k in sliders) sliders[k].addEventListener('input', () => { $('pattern').value = matchPattern(); syncOutputs(); save(); });
+  for (const k in sliders) sliders[k].addEventListener('input', () => { manual[k] = sliders[k].value; $('pattern').value = matchPattern(); syncOutputs(); save(); });
   $('shape').addEventListener('change', () => { star = $('shape').value.split(',').map(Number); save(); });
   $('len').addEventListener('change', save);
   $('measure').addEventListener('change', save);
   $('pattern').addEventListener('change', () => {
-    const v = PATTERNS[$('pattern').value];
-    if (v) { KEYS.forEach((k, i) => sliders[k].value = v[i]); phaseIdx = 0; phaseT = 0; }
-    syncOutputs(); save();
+    const sel = $('pattern').value;
+    // leaving Settle heart rate gives the sliders back their own values
+    const v = PATTERNS[sel] || (sel === 'custom' ? KEYS.map(k => +manual[k]) : null);
+    if (v) { KEYS.forEach((k, i) => { sliders[k].value = v[i]; manual[k] = String(v[i]); }); }
+    phaseIdx = 0; phaseT = 0;
+    lens[curMode] = $('len').value;
+    curMode = mode();
+    $('len').value = lens[curMode] ?? (curMode === 'pattern' ? '300' : '600');
+    refreshMode(); updateHrStatus(); save();
   });
+  $('easy').addEventListener('click', () => { if (session?.ad) easeBack(true); poke(); });
+  refreshMode();
 
   const toggle = () => {
     running = !running;
@@ -1136,11 +1503,11 @@ void main(){
 
   addEventListener('keydown', e => {
     if (['SELECT', 'INPUT', 'BUTTON'].includes(e.target.tagName)) return;
-    if (e.code === 'Space') { e.preventDefault(); toggle(); }
+    if (e.code === 'Space') { e.preventDefault(); session?.stage === 'tap' ? tapBreath() : toggle(); }
     else if (e.key === 'f' || e.key === 'F') fullscreen();
     else if (e.key === 'Escape' && !$('results').hidden) $('results').hidden = true;
   });
-  cv.addEventListener('dblclick', fullscreen);
+  cv.addEventListener('dblclick', () => { if (session?.stage !== 'tap') fullscreen(); });
 
   // Controls fade a few seconds after the last interaction. A tap on the background shows them,
   // and tapping the background again while they are visible hides them straight away.
@@ -1157,13 +1524,14 @@ void main(){
   };
   addEventListener('pointerdown', e => {
     lastPointer = e.pointerType;
+    if (session?.stage === 'tap' && e.target === cv) { tapBreath(); return; }   // taps count breaths; keep the panel away
     wasIdle = document.body.classList.contains('idle');
     poke();
   }, { capture: true, passive: true });
   // pointermove instead of mousemove: touch screens fire fake mouse events after a tap
   addEventListener('pointermove', e => { if (e.pointerType === 'mouse') poke(); }, { passive: true });
   ['keydown', 'input', 'change'].forEach(ev => addEventListener(ev, poke, { passive: true }));
-  cv.addEventListener('pointerup', e => { if (e.pointerType !== 'mouse' && !wasIdle && running) hideControls(); });
+  cv.addEventListener('pointerup', e => { if (session?.stage === 'tap') return; if (e.pointerType !== 'mouse' && !wasIdle && running) hideControls(); });
   poke();
 
   // keep the screen awake if the browser allows it
@@ -1190,17 +1558,22 @@ void main(){
     window.__showResults = showResults; // lets a test render the results card from a synthetic session
     window.__draw = draw;               // lets a test render a single animation frame
     window.__rest = restScene;          // and a single frame of the rest scene
-    hr.connected = true; hr.device = { name: 'Demo sensor' }; $('pulse').hidden = false;
-    $('connect').disabled = true; $('connect').textContent = 'Demo sensor';
+    hr.connected = true; hr.device = { name: 'Demo sensor' }; $('pulse').hidden = false; demoHist = [];
+    window.__session = () => session;   // lets a test inspect the adaptive controller
+    $('connect').disabled = true; $('connect').textContent = 'Demo sensor'; refreshMode();
     let t = 0;
     setInterval(() => {
       t += 1;
-      const base = session?.stage === 'after' ? 60 : session?.stage === 'breathe' ? 63 : 68;
+      const guided = session && session.kind !== 'pattern';
+      const base = guided ? 66 + 16 * Math.exp(-session.clock / (150 * session.fast))
+        : session?.stage === 'after' ? 60 : session?.stage === 'breathe' ? 63 : 68;
       const bpm = Math.round(base + 4 * Math.sin(t / 5));
       const rr = [60000 / bpm + (Math.random() - 0.5) * (session?.stage === 'after' ? 90 : 50)];
       const buf = new DataView(new ArrayBuffer(airMode ? 3 : 4));
       if (airMode) {
-        buf.setUint8(0, 0x01); buf.setUint16(1, Math.round(base + 6 * (demoP - 0.5) + (Math.random() - 0.5) * 2), true);
+        const then = performance.now() - 3000, old = demoHist.find(q => q[0] >= then);
+        const pd = session?.stage === 'breathe' ? (old ? old[1] : demoP) : 0.5;
+        buf.setUint8(0, 0x01); buf.setUint16(1, Math.round(base + 6 * (pd - 0.5) + (Math.random() - 0.5) * 2), true);
       } else {
         buf.setUint8(0, 0x10); buf.setUint8(1, bpm); buf.setUint16(2, Math.round(rr[0] * 1024 / 1000), true);
       }
