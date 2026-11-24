@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "Breathfold Monitor",
+  "version": "0.1.0",
+  "description": "Watches your heart rate from a Bluetooth band and suggests a Breathfold session when it rises above your baseline.",
+  "icons": { "16": "icon-16.png", "32": "icon-32.png", "48": "icon-48.png", "128": "icon-128.png" },
+  "action": { "default_title": "Breathfold Monitor", "default_icon": { "16": "icon-16.png", "32": "icon-32.png" } },
+  "background": { "service_worker": "background.js" },
+  "permissions": ["notifications", "storage", "tabs"]
+}

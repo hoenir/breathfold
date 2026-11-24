@@ -39,3 +39,16 @@ python -m http.server 8765 --directory app
 Open http://localhost:8765. Add `?demo=air` to simulate a bpm-only band.
 
 `breathe.html` is the original single-file prototype.
+
+## Breathfold Monitor (Chrome extension)
+
+`extension/` watches your heart rate in the background while you use the computer, even when Breathfold itself is closed. It stays quiet until something drifts, then suggests a session.
+
+- **Baseline**: the first 5 minutes of heart-rate data after Chrome starts (or press *New baseline from now*).
+- **Alerts**: a notification when the 2-minute average heart rate is 10 bpm or more above baseline, or when 3-minute variability falls below 60% of baseline. Both limits are adjustable. At most one suggestion every 30 minutes; *Not now* silences it for an hour. Clicking opens Breathfold in Settle heart rate.
+- **Variability**: RMSSD with sensors that send beat intervals. With a bpm-only band like the Fitbit Air, it is how much heart rate moves around its own 30-second average, a rough stand-in for HRV.
+- The live bpm shows on the toolbar icon.
+
+Chrome extensions can't use Bluetooth from their background worker, so the band is held by a small monitor page that opens as a pinned tab. Keep that tab open. The Fitbit Air serves one device at a time, so press *Release band for 2 h* before using Breathfold on your phone or tablet.
+
+**Install**: open `chrome://extensions`, switch on *Developer mode*, click *Load unpacked* and choose the `extension` folder. In the monitor tab, press *Connect band* and pick your band.

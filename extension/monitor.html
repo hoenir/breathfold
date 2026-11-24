@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Breathfold Monitor</title>
+<link rel="icon" href="icon-32.png">
+<style>
+  :root {
+    --night: #0a1619; --night-2: #10232a; --moon: #e4ece6; --glow: #9fd4c4; --ember: #e8a08f;
+    --dim: rgba(228, 236, 230, 0.55); --hair: rgba(228, 236, 230, 0.14);
+    --font-word: "Iowan Old Style", Georgia, serif;
+    --font-ui: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body {
+    margin: 0; min-height: 100vh; background: radial-gradient(ellipse at 50% 30%, var(--night-2), var(--night) 70%);
+    background-color: var(--night); color: var(--moon); font: 13px/1.5 var(--font-ui);
+    display: grid; place-items: start center; padding: 40px 16px;
+  }
+  main { width: min(620px, 100%); display: grid; gap: 22px; }
+  h1 { margin: 0; font: italic 400 2rem var(--font-word); letter-spacing: 0.01em; }
+  .sub { color: var(--dim); margin-top: 4px; }
+  .card { background: rgba(16, 35, 42, 0.7); border: 1px solid var(--hair); border-radius: 14px; padding: 18px 20px; display: grid; gap: 14px; }
+  .live { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+  .live b { font-size: 3rem; font-weight: 300; font-variant-numeric: tabular-nums; line-height: 1; }
+  .live .unit { color: var(--dim); }
+  .live .state { margin-left: auto; letter-spacing: 0.08em; }
+  .state.ok { color: var(--glow); } .state.warn { color: var(--ember); } .state.idle { color: var(--dim); }
+  .grid { display: grid; grid-template-columns: auto 1fr 1fr 1fr; gap: 8px 16px; align-items: baseline; }
+  .grid .h { color: var(--dim); font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; }
+  .grid .k { color: var(--dim); }
+  .grid .v { font-variant-numeric: tabular-nums; font-size: 1.15rem; font-weight: 300; }
+  .grid .v.over { color: var(--ember); }
+  .grid small { color: var(--dim); font-size: 0.7rem; margin-left: 3px; }
+  .field { display: grid; gap: 6px; }
+  .field label { display: flex; justify-content: space-between; color: var(--dim); letter-spacing: 0.08em; }
+  .field output { color: var(--moon); }
+  input[type="range"] { width: 100%; accent-color: var(--glow); margin: 0; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  button {
+    font: inherit; color: var(--moon); background: transparent; border: 1px solid var(--hair);
+    border-radius: 999px; padding: 6px 13px; cursor: pointer; letter-spacing: 0.05em;
+  }
+  button:hover:not(:disabled) { border-color: var(--dim); }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  button.primary { border-color: var(--glow); color: var(--glow); }
+  button:focus-visible, input:focus-visible { outline: 1px solid var(--glow); outline-offset: 2px; }
+  .status { color: var(--dim); }
+  .note { color: var(--dim); font-size: 0.75rem; line-height: 1.6; margin: 0; }
+  svg { width: 100%; height: auto; display: block; }
+  ul.log { list-style: none; margin: 0; padding: 0; color: var(--dim); font-size: 0.75rem; }
+  ul.log li { padding: 4px 0; border-top: 1px solid var(--hair); }
+  @media (max-width: 520px) { .grid { grid-template-columns: auto 1fr 1fr; } .grid .lim { display: none; } }
+</style>
+</head>
+<body>
+<main>
+  <div>
+    <h1>Breathfold Monitor</h1>
+    <div class="sub">Keep this tab open (it's pinned). It holds the band and stays quiet until your heart rate drifts from your baseline.</div>
+  </div>
+
+  <section class="card">
+    <div class="live"><b id="bpm">--</b><span class="unit">bpm</span><span class="state idle" id="state">not connected</span></div>
+    <div class="row">
+      <button id="connect" class="primary" type="button">Connect band</button>
+      <button id="pause" type="button" hidden>Release band for 2 h</button>
+      <span class="status" id="status">Fitbit Air, chest strap or watch</span>
+    </div>
+    <div id="chart"></div>
+  </section>
+
+  <section class="card">
+    <div class="grid">
+      <span></span><span class="h">Baseline</span><span class="h">Now</span><span class="h lim">Alert at</span>
+      <span class="k">Heart rate</span><span class="v" id="b-hr">—</span><span class="v" id="n-hr">—</span><span class="v lim" id="l-hr">—</span>
+      <span class="k" id="var-k">Variability</span><span class="v" id="b-var">—</span><span class="v" id="n-var">—</span><span class="v lim" id="l-var">—</span>
+    </div>
+    <p class="note" id="base-note">The baseline is taken from the first 5 minutes of data after Chrome starts.</p>
+    <div class="field"><label for="hrDelta">Heart rate alert <output id="o-hrDelta"></output></label><input id="hrDelta" type="range" min="5" max="25" step="1"></div>
+    <div class="field"><label for="varPct">Variability alert <output id="o-varPct"></output></label><input id="varPct" type="range" min="30" max="90" step="5"></div>
+    <div class="row">
+      <button id="rebase" type="button">New baseline from now</button>
+      <button id="test" type="button">Test notification</button>
+    </div>
+    <p class="note" id="var-note"></p>
+  </section>
+
+  <section class="card" id="log-card" hidden>
+    <div class="h" style="color:var(--dim);font-size:.7rem;letter-spacing:.14em;text-transform:uppercase">Today's suggestions</div>
+    <ul class="log" id="log"></ul>
+  </section>
+</main>
+<script src="monitor.js"></script>
+</body>
+</html>

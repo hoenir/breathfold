@@ -1481,6 +1481,11 @@ void main(){
     refreshMode(); updateHrStatus(); save();
   });
   $('easy').addEventListener('click', () => { if (session?.ad) easeBack(true); poke(); });
+  // ?pattern=adaptive (from the Breathfold Monitor extension) opens straight into that mode
+  const askPattern = new URLSearchParams(location.search).get('pattern');
+  if (askPattern && $('pattern').querySelector(`option[value="${CSS.escape(askPattern)}"]`)) {
+    $('pattern').value = askPattern; $('pattern').dispatchEvent(new Event('change'));
+  }
   refreshMode();
 
   const toggle = () => {
