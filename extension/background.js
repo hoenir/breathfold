@@ -25,13 +25,22 @@ async function openApp() {
   } else chrome.tabs.create({ url: APP });
 }
 
+// tell the monitor page what happened to a suggestion, for the day's history
+const report = (id, what) => {
+  const t = +id.split('-')[1];
+  if (t) chrome.runtime.sendMessage({ alert: t, what }).catch(() => {});
+};
+
 chrome.notifications.onClicked.addListener(id => {
   chrome.notifications.clear(id);
-  if (id === 'reconnect') ensureMonitor(true); else openApp();
+  if (id === 'reconnect') return ensureMonitor(true);
+  report(id, 'opened');
+  openApp();
 });
 chrome.notifications.onButtonClicked.addListener(async (id, i) => {
   chrome.notifications.clear(id);
   if (id === 'reconnect') return ensureMonitor(true);
-  if (i === 0) return openApp();
+  if (i === 0) { report(id, 'opened'); return openApp(); }
+  report(id, 'snoozed');
   await chrome.storage.local.set({ snoozeUntil: Date.now() + 60 * 60 * 1000 });   // "Not now": quiet for an hour
 });

@@ -44,10 +44,11 @@ Open http://localhost:8765. Add `?demo=air` to simulate a bpm-only band.
 
 `extension/` watches your heart rate in the background while you use the computer, even when Breathfold itself is closed. It stays quiet until something drifts, then suggests a session.
 
-- **Baseline**: the first 5 minutes of heart-rate data after Chrome starts (or press *New baseline from now*).
+- **Baseline**: the first 5 minutes of heart-rate data after Chrome starts, and again the first time you're at the computer each new day (days start at 4 am; Chrome's idle detection means a computer left on overnight doesn't take one while you're away). Or press *New baseline from now*.
 - **Alerts**: a notification when the 2-minute average heart rate is 10 bpm or more above baseline, or when 3-minute variability falls below 60% of baseline. Both limits are adjustable. At most one suggestion every 30 minutes; *Not now* silences it for an hour. Clicking opens Breathfold in Settle heart rate.
 - **Variability**: RMSSD with sensors that send beat intervals. With a bpm-only band like the Fitbit Air, it is how much heart rate moves around its own 30-second average, a rough stand-in for HRV.
-- The live bpm shows on the toolbar icon.
+- The live bpm shows on the toolbar icon. No notifications while you're away or the screen is locked.
+- **History** (in the same tab): each day's baseline and median heart rate over 14, 30 or 90 days; a table with variability, time monitored, time above the alert line and suggestions (and whether you opened Breathfold); and any day minute by minute. *Download CSV* exports the minutes. Data stays in Chrome on this computer, kept for 180 days.
 
 Chrome extensions can't use Bluetooth from their background worker, so the band is held by a small monitor page that opens as a pinned tab. Keep that tab open. The Fitbit Air serves one device at a time, so press *Release band for 2 h* before using Breathfold on your phone or tablet.
 
